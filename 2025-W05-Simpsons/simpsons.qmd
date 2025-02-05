@@ -1,0 +1,232 @@
+---
+title: "Tidy Tuesday - Simpsons"
+lang: "es-AR" 
+author: "Checho"
+date: "2/5/2025"
+format:
+  html:
+    toc: true
+    toc-location: left
+    code-fold: true
+    code-summary: "Ver código"
+    code-copy: hover
+categories: [ggplot2, tidytuesday, tidyverse, dplyr, data viz, fun, r, simpsons]
+execute: 
+  warning: false
+  error: false
+  message: false
+  dpi: 600
+---
+
+## The Simpsons Data
+
+Vamos a cargar los datos con el paquete `tidytuesdayR`:
+
+```{r}
+# tuesdata <- tidytuesdayR::tt_load('2025-02-04')
+# ## OR
+# tuesdata <- tidytuesdayR::tt_load(2025, week = 5)
+# 
+# simpsons_characters <- tuesdata$simpsons_characters
+# simpsons_episodes <- tuesdata$simpsons_episodes
+# simpsons_locations <- tuesdata$simpsons_locations
+# simpsons_script_lines <- tuesdata$simpsons_script_lines
+
+simpsons_characters <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-02-04/simpsons_characters.csv')
+simpsons_episodes <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-02-04/simpsons_episodes.csv')
+simpsons_locations <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-02-04/simpsons_locations.csv')
+simpsons_script_lines <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-02-04/simpsons_script_lines.csv')
+
+```
+
+# Pares de personajes
+
+Mi primer análisis consiste en averiguar qué combinaciones de personajes, generan las mejores calificaciones en IMDb, y mayor cantidad de visualizaciones.
+
+Para eso voy a usar los datos de `episodes` y los de `script_lines` y elegir las columnas que necesito.
+
+```{r}
+# Librerias
+library(tidyverse)
+library(extrafont)
+
+loadfonts()
+
+# Subset de episodios y script_lines
+episodes <- simpsons_episodes %>% 
+  select(id, imdb_rating, 
+         year = original_air_year, 
+         us_viewers = us_viewers_in_millions,
+         title)
+
+# Quedarme sólo con los scripts que tienen personajes conversando
+script_lines <- simpsons_script_lines %>% 
+  filter(speaking_line == TRUE) 
+
+# Uno los datos en un dataframe nuevo
+df <- left_join(script_lines, episodes, by = c("episode_id" = "id"))
+
+# Exploremos los datos
+glimpse(df)
+```
+
+Ahora vamos a crear una lista de personajes que aparecen por episodio:
+
+```{r}
+personajes_por_episodio <- df %>% 
+  filter(raw_character_text != "Man") %>% 
+  group_by(episode_id) %>% 
+  summarise(personajes = list(unique(raw_character_text)))
+```
+
+Este paso genera un data frame que contiene una fila por episodio, y luego una lista con los nombres de todos los personajes que tienen al menos una línea de diálogo en cada capítulo.
+
+El siguiente paso es procesar la lista de personas para encontrar las parejas dentro de cada capítulo.
+
+```{r}
+# Generar todas las combinaciones de duplas por episodio
+duplas_por_episodio <- personajes_por_episodio %>%
+  rowwise() %>% # Realiza el análisis por filas en vez de por columnas
+  mutate(duplas = list(combn(personajes, 2,   # Crea combinaciones de 2 personajes
+                             simplify = FALSE))) %>%
+  unnest(duplas) %>% # Transforma la listas en dataframe
+  mutate(dupla = map_chr(duplas, ~ paste(sort(.x), collapse = "-"))) %>%
+  select(episode_id, dupla)
+```
+
+Les soy honesto. Usé deepseek para este paso, así que les paso la explicación del código porque me pareció un enfoque muy interesante:
+
+### **Explicación del código**
+
+#### **1. `personajes_por_episodio`**
+
+Este es el dataframe que contiene, para cada episodio (`episode_id`), una lista de los `character_id` únicos que aparecen en ese episodio. Por ejemplo:
+
+| **episode_id** | **characters** |
+|:---------------|:---------------|
+| 1              | \[1, 2, 3\]    |
+| 2              | \[2, 4\]       |
+
+Aquí, `characters` es una columna de tipo lista, donde cada elemento es un vector de `character_id`.
+
+#### **2. `rowwise()`**
+
+La función `rowwise()` se usa para aplicar operaciones **fila por fila** en un dataframe. En este caso, queremos generar combinaciones de personajes **para cada episodio** (es decir, para cada fila).
+
+#### **3. `mutate(duplas = list(combn(characters, 2, simplify = FALSE)))`**
+
+-   **`combn()`**: Esta función genera todas las combinaciones posibles de un conjunto de elementos. En este caso, queremos combinaciones de 2 personajes (`2` es el segundo argumento).
+
+-   **`characters`**: Es la lista de `character_id` para el episodio actual.
+
+-   **`simplify = FALSE`**: Esto asegura que el resultado sea una lista de combinaciones en lugar de una matriz.
+
+-   **`list()`**: Envuelve el resultado en una lista para que sea compatible con `mutate()`.
+
+-   **`mutate(duplas = ...)`**: Crea una nueva columna llamada `duplas`, que contiene una lista de todas las combinaciones de 2 personajes para ese episodio.
+
+Por ejemplo, si `characters = [1, 2, 3]`, las combinaciones serían:
+
+-   `[1, 2]`
+
+-   `[1, 3]`
+
+-   `[2, 3]`
+
+#### **4. `unnest(duplas)`**
+
+La función `unnest()` se usa para "desanidar" una columna que contiene listas. En este caso, `duplas` es una columna de listas, donde cada elemento es una combinación de 2 personajes. Al usar `unnest()`, cada combinación se convierte en una fila separada.
+
+Por ejemplo, si teníamos:
+
+| **episode_id** | **duplas**                                             |
+|:---------------|:-------------------------------------------------------|
+| 1              | \[\[1,2\],\[1,3\],\[2,3\]\]\[\[1,2\],\[1,3\],\[2,3\]\] |
+
+Después de `unnest()`, tendríamos:
+
+| **episode_id** | **duplas** |
+|:---------------|:-----------|
+| 1              | \[1, 2\]   |
+| 1              | \[1, 3\]   |
+| 1              | \[2, 3\]   |
+
+#### **5. `mutate(dupla = map_chr(duplas, ~ paste(sort(.x), collapse = "-")))`**
+
+-   **`map_chr()`**: Aplica una función a cada elemento de una lista y devuelve un vector de caracteres.
+
+-   **`sort(.x)`**: Ordena los `character_id` en cada dupla. Esto asegura que la dupla "1-2" sea la misma que "2-1".
+
+-   **`paste(..., collapse = "-")`**: Convierte la dupla ordenada en una cadena de texto, separando los `character_id` con un guion (`-`).
+
+-   **`mutate(dupla = ...)`**: Crea una nueva columna llamada `dupla`, que contiene la representación en texto de cada combinación.
+
+Por ejemplo, si `duplas = [1, 2]`, después de este paso tendríamos `dupla = "1-2"`.
+
+#### **6. `select(episode_id, dupla)`**
+
+Finalmente, seleccionamos solo las columnas `episode_id` y `dupla` para quedarnos con un dataframe limpio que contiene, para cada episodio, todas las duplas de personajes que aparecen juntos.
+
+## Calcular el rating promedio por duplas
+
+Vamos a limpiar un poco más los datos, quedándonos únicamente con las duplas que aparezcan al menos 5 veces
+
+```{r}
+top_duplas <- duplas_por_episodio %>% 
+  count(dupla, name = "cuenta") %>% 
+  filter(cuenta >= 10)
+
+# Reducimos el dataframe
+duplas_por_episodio <- duplas_por_episodio %>% 
+  filter(dupla %in% top_duplas$dupla)
+```
+
+Ahora podemos unir los datos de `duplas_por_episodio` y de esa manera calculamos el rating de cada pareja de personajes.
+
+```{r}
+duplas_con_rating <- duplas_por_episodio %>% 
+  inner_join(episodes, by = c("episode_id" = "id")) %>% 
+  group_by(dupla) %>% 
+  summarise(imdb_promedio = mean(imdb_rating, na.rm = TRUE),
+            episodios = n())
+
+# Filtrar solo las duplas que aparecen en al menos 10 episodios
+duplas_con_rating <- duplas_con_rating %>%
+  filter(episodios >= 10) %>%
+  arrange(desc(imdb_promedio))
+
+```
+
+Y ahora podemos hacer un gráfico de las 10 parejas con mejor puntaje promedio en `imdb_ranking`.
+
+```{r}
+# Seleccionar los mejores dúos
+top_10_duplas <- duplas_con_rating %>% 
+  head(10)
+
+# Gráfico
+ggplot(top_10_duplas, aes(y = reorder(dupla, imdb_promedio), x = imdb_promedio)) +
+  geom_point(size = 3, color = "#4f76df") +
+  geom_segment(aes(x = 0, xend = imdb_promedio,
+                   y = dupla, yend = dupla), color = "#4f76df") +
+  geom_text(aes(label = paste0("Rating: ", round(imdb_promedio, 2), " Episodios: ", episodios)),nudge_y = 0.35,
+            size = 3.5,
+            color = "#4f76df", family = "Atma Medium") +
+  labs(
+    title = "Top 10 duplas de personajes con mejor IMDb rating promedio",
+    y = "Dupla de personajes",
+    x = "IMDb rating promedio"
+  ) +
+  scale_x_continuous(limits = c(0,8)) +
+  theme(panel.grid = element_blank(),
+                 plot.background = element_rect(fill = "#ffd90f"),
+                 panel.background = element_blank(),
+                 panel.grid.major.x = element_line(color = "#70d1ff"),
+                 text = element_text(face = "bold", family = "Atma Medium"),
+                 plot.title.position = "plot") +
+  scale_x_continuous(limits = c(0,8.5))
+
+ggsave("top_duplas.png", dpi = 300)
+```
+
+![](apu_vuelva_prontos.png){width="248"}
